@@ -1,0 +1,9 @@
+*.cs text eol=lf
+*.cpp text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+# Unity emits empty YAML fields with trailing spaces on every serialization.
+*.meta -whitespace
+*.asset -whitespace
+*.unity -whitespace
+*.mat -whitespace
