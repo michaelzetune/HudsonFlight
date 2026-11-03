@@ -9,7 +9,7 @@ namespace HudsonFlight
         public WorldBuilder World {get;private set;}
         public Camera View {get;private set;}
         public Runway Departure, Destination;
-        public bool ReverseApproach, Help, Paused, Hints=true, Chase, Crashed, Ready=true;
+        public bool ReverseApproach, Help, Paused, Hints=true, Chase, Crashed, Ready=true, Assistance=true, Instruments=true;
         public string Failure="", LandingReport="";
         public float Throttle=.12f, Elevator, Aileron, Rudder, Trim, Flaps;
         public float Airspeed, Altitude, Agl, VerticalSpeed, Heading, Pitch, Roll, Rpm, Slip;
@@ -22,7 +22,8 @@ namespace HudsonFlight
         public string ApproachName => Destination.airport+" "+Destination.name.Split('/')[ReverseApproach?1:0];
         public bool Running => !Paused && !Help && !Crashed && string.IsNullOrEmpty(Failure);
         FlightDynamics dynamics;
-        Transform aircraft,propeller;
+        readonly KeyboardAssist assist=new KeyboardAssist();
+        Transform aircraft,propeller,blurredPropeller;
         float lookYaw,lookPitch;
         bool hasFlown;
         AudioSource engine;
@@ -48,10 +49,11 @@ namespace HudsonFlight
                 World=new WorldBuilder();World.Build();Physics.SyncTransforms();
                 Departure=Array.Find(World.Runways,r=>r.airport=="KLGA" && r.name=="04/22");
                 Destination=Departure;approachIndex=Array.IndexOf(World.Runways,Departure)*2;
-                aircraft=World.BuildAircraft();propeller=aircraft.Find("Propeller");
+                aircraft=World.BuildAircraft();propeller=aircraft.Find("Propeller");blurredPropeller=aircraft.Find("Propeller.Fast");
                 View=new GameObject("Pilot camera").AddComponent<Camera>();View.tag="MainCamera";
                 View.fieldOfView=70;View.nearClipPlane=.1f;View.farClipPlane=75000;
-                View.clearFlags=CameraClearFlags.SolidColor;View.backgroundColor=new Color(.61f,.77f,.9f);
+                View.clearFlags=CameraClearFlags.Skybox;View.backgroundColor=new Color(.61f,.77f,.9f);
+                View.allowHDR=true;
                 View.gameObject.AddComponent<AudioListener>();
                 AddAudio();ResetFlight();
             }
@@ -78,6 +80,7 @@ namespace HudsonFlight
                 dynamics=new FlightDynamics(Path.Combine(Application.streamingAssetsPath,"JSBSim"),
                     Geography.Latitude(spawn),Geography.Longitude(spawn),Departure.Heading,(Departure.elevation+.15)/.3048);
                 Throttle=.12f;Elevator=Aileron=Rudder=Trim=Flaps=0;flapIndex=0;
+                ReadState();assist.Reset(Departure.Heading);
                 ApplyControls(1);
                 for(int i=0;i<3;i++) dynamics.Step(120);
                 ReadState();hasFlown=false;Crashed=false;Failure="";LandingReport="";Ready=true;
@@ -92,6 +95,8 @@ namespace HudsonFlight
             if(Input.GetKeyDown(KeyCode.Escape)) { if(Help)Help=false;else Paused=!Paused; }
             if(Input.GetKeyDown(KeyCode.C)) {Chase=!Chase;lookYaw=lookPitch=0;}
             if(Input.GetKeyDown(KeyCode.G))Hints=!Hints;
+            if(Input.GetKeyDown(KeyCode.T))ToggleAssistance();
+            if(Input.GetKeyDown(KeyCode.Tab))Instruments=!Instruments;
             if(Input.GetKeyDown(KeyCode.R) && (Crashed || Paused))ResetFlight();
             if(Running && !Automated)
             {
@@ -121,9 +126,10 @@ namespace HudsonFlight
         {
             dynamics.Set("fcs/throttle-cmd-norm",Throttle);
             dynamics.Set("fcs/elevator-cmd-norm",Elevator);
-            dynamics.Set("fcs/aileron-cmd-norm",Aileron);
+            Vector2 lateral=Assistance?assist.Controls(Aileron,Rudder,Roll,RollRate,Heading,YawRate,Slip,Airspeed,OnGround,Time.fixedDeltaTime):new Vector2(Aileron,Rudder);
+            dynamics.Set("fcs/aileron-cmd-norm",lateral.x);
             // JSBSim's C172 uses negative rudder for a right pedal input.
-            dynamics.Set("fcs/rudder-cmd-norm",-Rudder);
+            dynamics.Set("fcs/rudder-cmd-norm",-lateral.y);
             dynamics.Set("fcs/pitch-trim-cmd-norm",Trim);
             dynamics.Set("fcs/flap-cmd-norm",Flaps);
             dynamics.Set("fcs/left-brake-cmd-norm",brakes);
@@ -180,12 +186,10 @@ namespace HudsonFlight
         void LateUpdate()
         {
             if(View==null || aircraft==null)return;
-            float aspect=Screen.width/(float)Mathf.Max(1,Screen.height),targetAspect=1.6f;
-            View.rect=aspect>targetAspect
-                ? new Rect((1-targetAspect/aspect)/2,0,targetAspect/aspect,1)
-                : new Rect(0,(1-aspect/targetAspect)/2,1,aspect/targetAspect);
-            aircraft.position=Position;aircraft.rotation=Attitude;aircraft.gameObject.SetActive(Chase);
-            if(propeller!=null)propeller.Rotate(0,0,Rpm*6*Time.deltaTime,Space.Self);
+            View.rect=new Rect(0,0,1,1);
+            aircraft.position=Position;aircraft.rotation=Attitude;
+            if(propeller!=null){propeller.gameObject.SetActive(Rpm<500);propeller.Rotate(0,0,Rpm*6*Time.deltaTime,Space.Self);}
+            if(blurredPropeller!=null)blurredPropeller.gameObject.SetActive(Rpm>=500);
             Quaternion look=Quaternion.Euler(lookPitch,lookYaw,0);
             if(Chase)
             {
@@ -193,13 +197,14 @@ namespace HudsonFlight
                 View.transform.position=Position+orbit*new Vector3(0,4,-17);
                 View.transform.LookAt(Position+Vector3.up);
             }
-            else {View.transform.position=Position+Attitude*new Vector3(0,.55f,.3f);View.transform.rotation=Attitude*look;}
+            else {View.transform.position=Position+Attitude*new Vector3(-.28f,.38f,.25f);View.transform.rotation=Attitude*look;}
         }
         public void NextApproach()
         {
             approachIndex=(approachIndex+1)%(World.Runways.Length*2);
             Destination=World.Runways[approachIndex/2];ReverseApproach=approachIndex%2==1;
         }
+        public void ToggleAssistance(){Assistance=!Assistance;assist.Reset(Heading);}
         public void Crash(string reason) {if(Crashed)return;Crashed=true;Failure=reason;}
         public void SetTestFlight(Vector3 location, float heading, float aglFeet, float knots, float lookDown=0)
         {
@@ -209,7 +214,7 @@ namespace HudsonFlight
                 Geography.Latitude(location),Geography.Longitude(location),heading,(Departure.elevation+.15)/.3048,aglFeet,knots);
             Elevator=Aileron=Rudder=Trim=Flaps=0;Ready=false;Crashed=false;Failure="";LandingReport="";
             lookPitch=lookDown;lookYaw=0;
-            Paused=false;hasFlown=true;ReadState();
+            Paused=false;hasFlown=true;ReadState();assist.Reset(heading);
         }
         void OnApplicationFocus(bool focus){if(!focus && !Automated)Paused=true;}
         void OnDestroy(){dynamics?.Dispose();}

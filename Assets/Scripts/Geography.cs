@@ -32,6 +32,6 @@ namespace HudsonFlight
         }
     }
     [Serializable] public class RunwayCollection { public Runway[] runways; }
-    [Serializable] public class SceneryMesh { public string name, kind; public float[] vertices; public int[] triangles; public float[] color; }
+    [Serializable] public class SceneryMesh { public string name, kind; public float[] vertices; public int[] triangles, styles; public float[] color; }
     [Serializable] public class SceneryCollection { public SceneryMesh[] meshes; }
 }

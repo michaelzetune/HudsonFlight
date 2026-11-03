@@ -13,6 +13,16 @@ LAT,LON=40.7772,-73.8726
 SCALE=111319.49079327358
 XS=SCALE*math.cos(math.radians(LAT))
 def project(lon,lat,z=None): return ((lon-LON)*XS,(lat-LAT)*SCALE)
+visuals=ROOT/"Assets/StreamingAssets/Visuals"
+coverage_path=visuals/"survey/coverage.json"
+coverage=shape(json.loads(coverage_path.read_text())) if coverage_path.exists() else Polygon()
+landmark_path=visuals/"landmarks/footprints.json"
+landmark_shapes=[shape(b["footprint"]).buffer(2) for b in json.loads(landmark_path.read_text())["buildings"]] if landmark_path.exists() else []
+from shapely.strtree import STRtree
+landmark_tree=STRtree(landmark_shapes)
+def replaced(poly):
+    if coverage.covers(poly.representative_point()):return True
+    return any(poly.intersection(landmark_shapes[i]).area>poly.area*.25 for i in landmark_tree.query(poly,predicate="intersects"))
 meshes=[]
 buckets={}
 COLORS={'land':[.37,.43,.36], 'building':[.57,.60,.61], 'airport':[.43,.45,.44], 'bridge':[.49,.53,.55], 'park':[.27,.39,.28]}
@@ -29,8 +39,10 @@ def add(poly,base,height,kind,name=''):
     if len(coords)<3:return
     inds=earcut.triangulate_float64(coords,np.cumsum([len(r) for r in rings],dtype=np.uint32)).tolist()
     key=(kind, int(poly.centroid.x//1500),int(poly.centroid.y//1500))
-    bucket=buckets.setdefault(key,{'name':kind+' '+str(key[1:]),'kind':kind,'vertices':[],'triangles':[],'color':COLORS[kind]})
+    bucket=buckets.setdefault(key,{'name':kind+' '+str(key[1:]),'kind':kind,'vertices':[],'triangles':[],'styles':[],'color':COLORS[kind]})
     verts=bucket['vertices'];tris=bucket['triangles'];offset=len(verts)//3
+    seed=int(abs(math.sin(poly.centroid.x*.071+poly.centroid.y*.053)*43758.5453)*1000)%256
+    style=seed+(65280 if height>55 and seed>70 else 0)
     for x,z in coords:verts.extend([round(x,2),round(base+height,2),round(z,2)])
     # Earcut winds CCW in XY. Our XY maps to XZ, so reverse to point normals up.
     for a,b,c in zip(inds[::3],inds[1::3],inds[2::3]):
@@ -47,15 +59,16 @@ def add(poly,base,height,kind,name=''):
                 n=len(verts)//3
                 verts.extend([x,base,z,xx,base,zz,xx,base+height,zz,x,base+height,z])
                 tris.extend([n,n+2,n+1,n,n+3,n+2])
+    bucket['styles'].extend([style]*(len(verts)//3-offset))
 
 boroughs=json.loads((CACHE/'boroughs.geojson').read_text())
 for feature in boroughs['features']:
     p=transform(project,shape(feature['geometry']))
     add(p,0,3,'land')
 
-# Simplified west bank backdrop; NYC shorelines above use city boundary data.
-nj=[(-74.21,40.57),(-74.06,40.66),(-74.035,40.70),(-74.035,40.716),(-74.022,40.735),(-74.010,40.751),(-74.002,40.771),(-73.977,40.805),(-73.960,40.85),(-73.924,40.9),(-74.3,40.98),(-74.3,40.55)]
-add(Polygon([project(*p) for p in nj]),0,5,'land')
+# Official NJDEP coastline includes harbor islands and the west Hudson bank.
+from shorelines import new_jersey_land
+add(transform(project,new_jersey_land()),0,3,'land')
 
 elements=json.loads((CACHE/'buildings.json').read_text())['elements']
 count=0
@@ -64,7 +77,8 @@ for item in elements:
     try:
         text=tags.get('height','12');h=float(re.search(r'[\d.]+',text).group())
         if 'ft' in text or "'" in text:h*=.3048
-        p=Polygon([project(n['lon'],n['lat']) for n in geo])
+        p=Polygon([project(n['lon'],n['lat']) for n in geo]).buffer(0)
+        if replaced(p):continue
         # Keep every tall building and a deterministic sampling of low-rise blocks.
         if h<24 and item['id']%4:continue
         if p.area<35:continue
@@ -80,6 +94,11 @@ for item in elements:
                 add(scale(p,xfact=1-i*.036,yfact=1-i*.036,origin='centroid'),3+i*34.75,34.75,'building')
             add(p.centroid.buffer(2,resolution=5),420,124,'building')
         else:add(p,3,min(h,600),'building')
+        # Rooftop mechanical penthouses add silhouette and self-shadow detail.
+        if h>24 and p.area>400 and item['id']%3==0:
+            cx,cz=p.centroid.x,p.centroid.y
+            unit=box(cx-3,cz-2,cx+3,cz+2).intersection(p)
+            add(unit,3+min(h,600),2.5,'building')
         count+=1
     except (ValueError,AttributeError):continue
 
@@ -93,7 +112,8 @@ if airport_path.exists():
             p=Polygon(points) if len(points)>3 and points[0]==points[-1] else LineString(points).buffer(11)
             add(p,6.1,0,'airport')
         elif 'building' in tags and len(points)>3:
-            add(Polygon(points),6.1,15,'building')
+            p=Polygon(points).buffer(0)
+            if not replaced(p):add(p,6.1,15,'building')
 
 bridge_path=CACHE/'bridges.json'
 if bridge_path.exists():
@@ -102,6 +122,8 @@ if bridge_path.exists():
         g=item.get('geometry',[])
         if len(g)<2:continue
         line=LineString([project(n['lon'],n['lat']) for n in g])
+        # Authored bridge models include their own decks and towers.
+        if any(line.intersection(landmark_shapes[i]).length>line.length*.3 for i in landmark_tree.query(line,predicate='intersects')):continue
         if line.length<70:continue
         add(line.buffer(9),29,4,'bridge')
         for d in range(0,int(line.length),110):
@@ -127,13 +149,14 @@ for b in buckets.values():
         if edge not in midpoints:
             midpoints[edge]=len(vertices)//3
             vertices.extend(round((vertices[u*3+k]+vertices[v*3+k])/2,2) for k in range(3))
+            b['styles'].append(b['styles'][u])
         mid=midpoints[edge]
         pending.extend([(u,mid,w),(mid,v,w)])
     b['triangles']=triangles
     meshes.append(b)
 (OUT/'world.json').write_text(json.dumps({'meshes':meshes},separators=(',',':')))
 sources=[{'name':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in CACHE.iterdir() if p.is_file()]
-(OUT/'sources.json').write_text(json.dumps({'generated':datetime.datetime.now(datetime.timezone.utc).isoformat(),'files':sources,'buildings':count,'note':'NYC DCP borough geometry; OSM buildings/airport/bridges under ODbL; OurAirports public-domain runways. NJ shore is an approximate backdrop.'},indent=2))
+(OUT/'sources.json').write_text(json.dumps({'generated':datetime.datetime.now(datetime.timezone.utc).isoformat(),'files':sources,'buildings':count,'note':'NYC DCP borough geometry; OSM buildings/airport/bridges under ODbL; OurAirports public-domain runways. NJ shoreline: NJDEP Coastline 2002.'},indent=2))
 print('Baked',len(meshes),'mesh chunks;',count,'buildings;',round((OUT/'world.json').stat().st_size/1e6,1),'MB')
 
 from PIL import Image, ImageDraw

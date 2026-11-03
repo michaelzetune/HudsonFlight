@@ -37,7 +37,9 @@ namespace HudsonFlight
             string root=Path.Combine(Application.streamingAssetsPath,"Scenery");
             Runways=JsonUtility.FromJson<RunwayCollection>(File.ReadAllText(Path.Combine(root,"runways.json"))).runways;
             var data=JsonUtility.FromJson<SceneryCollection>(File.ReadAllText(Path.Combine(root,"world.json")));
-            Cube("Atlantic & harbor",new Vector3(0,-2,0),new Vector3(200000,4,200000),new Color(.12f,.30f,.38f),null,true,GroundLayer);
+            var water=Cube("Atlantic & harbor",new Vector3(0,-2,0),new Vector3(200000,4,200000),new Color(.12f,.30f,.38f),null,true,GroundLayer);
+            water.GetComponent<Renderer>().sharedMaterial=new Material(Resources.Load<Shader>("Harbor"));
+            var facade=new Material(Resources.Load<Shader>("CityFacade"));
             foreach (var item in data.meshes)
             {
                 var obj=new GameObject(item.name);bool ground=item.kind=="land" || item.kind=="park" || item.kind=="airport";
@@ -46,29 +48,47 @@ namespace HudsonFlight
                 var vertices=new Vector3[item.vertices.Length/3];
                 for(int i=0;i<vertices.Length;i++) vertices[i]=new Vector3(item.vertices[i*3],item.vertices[i*3+1],item.vertices[i*3+2]);
                 mesh.vertices=vertices;mesh.triangles=item.triangles;mesh.RecalculateNormals();mesh.RecalculateBounds();
+                if(item.styles!=null && item.styles.Length==vertices.Length)
+                {
+                    var colors=new Color32[vertices.Length];
+                    for(int i=0;i<colors.Length;i++)colors[i]=new Color32((byte)(item.styles[i]&255),(byte)(item.styles[i]>>8),0,255);
+                    mesh.colors32=colors;
+                }
                 obj.AddComponent<MeshFilter>().sharedMesh=mesh;
-                obj.AddComponent<MeshRenderer>().sharedMaterial=Material(new Color(item.color[0],item.color[1],item.color[2]));
+                var renderer=obj.AddComponent<MeshRenderer>();
+                renderer.sharedMaterial=item.kind=="building"?facade:Material(new Color(item.color[0],item.color[1],item.color[2]));
+                if(item.kind=="airport" || item.kind=="park")renderer.enabled=false;
                 obj.AddComponent<MeshCollider>().sharedMesh=mesh;
                 obj.isStatic=true;
             }
+            VisualAssets.Aerial();
+            SurveyBuildings.Build();
+            VisualAssets.Landmarks();
             foreach(var r in Runways) BuildRunway(r);
             RenderSettings.ambientMode=AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor=new Color(.64f,.76f,.88f);
-            RenderSettings.ambientEquatorColor=new Color(.54f,.59f,.60f);
-            RenderSettings.ambientGroundColor=new Color(.26f,.28f,.25f);
+            RenderSettings.ambientSkyColor=new Color(.48f,.57f,.69f);
+            RenderSettings.ambientEquatorColor=new Color(.38f,.43f,.48f);
+            RenderSettings.ambientGroundColor=new Color(.21f,.22f,.20f);
             RenderSettings.fog=true;RenderSettings.fogMode=FogMode.ExponentialSquared;
-            RenderSettings.fogColor=new Color(.67f,.79f,.86f);RenderSettings.fogDensity=.000024f;
+            RenderSettings.fogColor=new Color(.66f,.74f,.8f);RenderSettings.fogDensity=.000032f;
             var sun=new GameObject("Clear daylight").AddComponent<Light>();sun.type=LightType.Directional;
-            sun.intensity=1.15f;sun.color=new Color(1f,.96f,.87f);sun.shadows=LightShadows.Soft;
-            sun.transform.rotation=Quaternion.Euler(48,-35,0);
-            QualitySettings.shadowDistance=1800;QualitySettings.antiAliasing=4;
+            sun.intensity=1.2f;sun.color=new Color(1f,.96f,.89f);sun.shadows=LightShadows.Soft;
+            sun.transform.rotation=Quaternion.Euler(38,-48,0);sun.shadowBias=.035f;sun.shadowNormalBias=.2f;
+            var sky=new Material(Resources.Load<Shader>("DaylightSky"));sky.SetVector("_SunDirection",-sun.transform.forward);RenderSettings.skybox=sky;RenderSettings.sun=sun;
+            QualitySettings.shadowDistance=2800;QualitySettings.shadowResolution=ShadowResolution.VeryHigh;QualitySettings.shadowCascades=4;QualitySettings.antiAliasing=4;
+            QualitySettings.anisotropicFiltering=AnisotropicFiltering.ForceEnable;
+            var probe=new GameObject("Daylight reflection").AddComponent<ReflectionProbe>();
+            probe.mode=ReflectionProbeMode.Realtime;probe.refreshMode=ReflectionProbeRefreshMode.OnAwake;
+            probe.cullingMask=0;probe.clearFlags=ReflectionProbeClearFlags.Skybox;probe.size=Vector3.one*150000;probe.resolution=128;
+            DynamicGI.UpdateEnvironment();
         }
         void BuildRunway(Runway r)
         {
             var parent=new GameObject(r.airport+" runway "+r.name).transform;
             parent.position=(r.A+r.B)/2;parent.rotation=Quaternion.Euler(0,r.Heading,0);
             float length=Vector3.Distance(r.A,r.B);
-            Cube("Runway",Vector3.zero,new Vector3(r.width,.3f,length),new Color(.19f,.21f,.22f),parent,true,GroundLayer);
+            var pavement=Cube("Runway",Vector3.zero,new Vector3(r.width,.3f,length),new Color(.19f,.21f,.22f),parent,true,GroundLayer);
+            pavement.GetComponent<Renderer>().sharedMaterial=new Material(Resources.Load<Shader>("RunwaySurface"));
             Color white=new Color(.89f,.87f,.79f);
             for(float z=-length/2+65;z<length/2-65;z+=60)
                 Cube("Centerline",new Vector3(0,.17f,z),new Vector3(.9f,.025f,30),white,parent);
@@ -97,23 +117,7 @@ namespace HudsonFlight
         }
         public Transform BuildAircraft()
         {
-            var root=new GameObject("C172P").transform;
-            Color white=new Color(.9f,.91f,.87f),red=new Color(.65f,.13f,.12f),dark=new Color(.07f,.11f,.13f);
-            Cube("Fuselage",new Vector3(0,0,0),new Vector3(1.1f,1.15f,5.5f),white,root);
-            Cube("Cowling",new Vector3(0,-.18f,2.7f),new Vector3(.92f,.8f,1.4f),white,root);
-            Cube("Windshield",new Vector3(0,.35f,1.2f),new Vector3(1.12f,.7f,.07f),dark,root);
-            Cube("Wing",new Vector3(0,.75f,.2f),new Vector3(10.9f,.14f,1.5f),white,root);
-            Cube("Tailplane",new Vector3(0,.25f,-2.5f),new Vector3(3.4f,.1f,.85f),white,root);
-            Cube("Tail fin",new Vector3(0,.9f,-2.55f),new Vector3(.12f,1.4f,1f),red,root);
-            foreach(float x in new[]{-1.2f,1.2f})
-            {
-                Cube("Main gear",new Vector3(x*.7f,-.65f,-.1f),new Vector3(.08f,.9f,.08f),dark,root);
-                Cube("Wheel",new Vector3(x,-1.08f,-.1f),new Vector3(.16f,.44f,.44f),dark,root);
-                Cube("Accent",new Vector3(Mathf.Sign(x)*.56f,-.13f,-.8f),new Vector3(.015f,.13f,3.7f),red,root);
-            }
-            Cube("Nose gear",new Vector3(0,-.9f,2),new Vector3(.15f,.7f,.28f),dark,root);
-            Cube("Propeller",new Vector3(0,0,3.46f),new Vector3(.12f,1.9f,.06f),dark,root);
-            return root;
+            return VisualAssets.Aircraft();
         }
     }
 }

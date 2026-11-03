@@ -15,9 +15,11 @@ namespace HudsonFlight
         {
             Directory.CreateDirectory("Assets/Scenes");
             var scene=EditorSceneManager.NewScene(NewSceneSetup.EmptyScene,NewSceneMode.Single);
+            // Preserve the fog variant used by the runtime-built world.
+            RenderSettings.fog=true;RenderSettings.fogMode=FogMode.ExponentialSquared;
             EditorSceneManager.SaveScene(scene,"Assets/Scenes/Flight.unity");
             PlayerSettings.companyName="HudsonFlight";PlayerSettings.productName="Hudson Flight";
-            PlayerSettings.bundleVersion="0.1.0";
+            PlayerSettings.bundleVersion="0.3.0";
             PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.Standalone,"com.hudsonflight.simulator");
             PlayerSettings.SetArchitecture(NamedBuildTarget.Standalone,1);
             UnityEditor.OSXStandalone.UserBuildSettings.architecture=OSArchitecture.ARM64;

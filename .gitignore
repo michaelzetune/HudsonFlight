@@ -10,6 +10,7 @@ Tools/unity-install.sh
 Assets/Plugins/macOS/*.dylib
 Assets/StreamingAssets/JSBSim/
 Assets/StreamingAssets/Scenery/
+Assets/StreamingAssets/Visuals/
 .DS_Store
 *.csproj
 *.sln
