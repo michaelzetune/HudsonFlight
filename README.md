@@ -2,6 +2,12 @@
 
 A native Apple Silicon macOS flight simulator prototype: Unity 6.3 LTS, C#, and JSBSim 1.3.2.
 
+## Preview
+
+[![Hudson Flight gameplay: flying over NYC in chase view](Docs/flight-preview.gif)](Docs/flight-preview.mp4)
+
+[Watch the full 24-second gameplay recording](Docs/flight-preview.mp4).
+
 ## Play
 
 Open `~/Applications/Hudson Flight.app` (a copy also lives at `Build/Hudson Flight.app`).
